@@ -8,6 +8,7 @@ import net.sf.cglib.proxy.MethodInterceptor
 import net.sf.cglib.proxy.MethodProxy
 import java.lang.IllegalStateException
 import java.lang.reflect.Method
+import java.lang.reflect.Modifier
 import java.util.*
 import java.util.concurrent.TimeUnit
 
@@ -34,6 +35,15 @@ class MeowCache<T : Any> private constructor(
         cacheAdapter.invalidateAll()
     }
 
+    fun put(method: Method, args: Array<out Any?>, value: Any?) {
+        if (ignoreNull && value == null) throw NullValueCacheException
+        cacheAdapter.put(cacheKeyGenerate(raw, method, args), Optional.ofNullable(value))
+    }
+
+    fun remove(method: Method, args: Array<out Any?>) {
+        cacheAdapter.invalidate(cacheKeyGenerate(raw, method, args))
+    }
+
     class Builder<T : Any> private constructor(private val clazz: Class<T>) {
         var cache = {
             CaffeineCacheAdapter(
@@ -56,6 +66,10 @@ class MeowCache<T : Any> private constructor(
         }
 
         fun build(): MeowCache<T> {
+            check(Modifier.isFinal(clazz.modifiers).not()) { "Can only proxy non-final classes" }
+            check(
+                clazz.methods.plus(clazz.declaredMethods)
+                    .any { Modifier.isFinal(it.modifiers).not() }) { "Methods of classes cannot all be final" }
             val meowCache =
                 MeowCache(
                     clazz = clazz,
@@ -79,8 +93,8 @@ class MeowCache<T : Any> private constructor(
 
         fun buildOriginal(): T {
             val meow = build()
-            val rawField = tryRun { clazz.getField("raw") ?: clazz.getDeclaredField("raw") }
-            val cacheField = tryRun { clazz.getField("cache") ?: clazz.getDeclaredField("cache") }
+            val rawField = tryRun { clazz.getDeclaredField("raw") } ?: tryRun { clazz.getField("raw") }
+            val cacheField = tryRun { clazz.getDeclaredField("cache") } ?: tryRun { clazz.getField("cache") }
             rawField?.let {
                 if (it.type.isAssignableFrom(clazz)) {
                     it.isAccessible = true
@@ -100,7 +114,7 @@ class MeowCache<T : Any> private constructor(
 
 }
 
-fun <T : Any> buildMeowCache(clazz: Class<T>, builder: MeowCache.Builder<T>.() -> Unit= {}): MeowCache<T> {
+fun <T : Any> buildMeowCache(clazz: Class<T>, builder: MeowCache.Builder<T>.() -> Unit = {}): MeowCache<T> {
     return MeowCache.Builder.newBuilder(clazz).also(builder).build()
 }
 
